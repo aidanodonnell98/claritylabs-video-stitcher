@@ -66,11 +66,6 @@ app.post("/stitch", async (req, res) => {
       audioPath,
       videoPaths
     });
-    
-    catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
 });
 
 const API_KEY = process.env.API_KEY; // set in Railway variables
