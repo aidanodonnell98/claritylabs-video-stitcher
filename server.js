@@ -5,17 +5,18 @@ import path from "path";
 import os from "os";
 
 const app = express();
-app.get("/", (req, res) => {
-  res.status(200).send("OK");
-});
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "10mb" }));
+
+app.get("/", (req, res) => res.status(200).send("OK"));
 
 app.post("/stitch", (req, res) => {
-  res.status(200).json({
+  const { audioUrl, videoUrls } = req.body || {};
+  return res.status(200).json({
     ok: true,
-    receivedKeys: Object.keys(req.body || {}),
-    sample: req.body || null
+    audioUrl,
+    videoCount: Array.isArray(videoUrls) ? videoUrls.length : 0,
+    firstVideo: Array.isArray(videoUrls) ? videoUrls[0] : null
   });
 });
 
@@ -118,5 +119,8 @@ app.post("/stitch", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("stitcher running on", PORT));
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("stitcher running on", PORT);
+});
