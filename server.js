@@ -12,7 +12,11 @@ app.get("/", (req, res) => {
 app.use(express.json({ limit: "50mb" }));
 
 app.post("/stitch", (req, res) => {
-  res.status(200).json({ ok: true, received: Object.keys(req.body || {}) });
+  res.status(200).json({
+    ok: true,
+    receivedKeys: Object.keys(req.body || {}),
+    sample: req.body || null
+  });
 });
 
 const API_KEY = process.env.API_KEY; // set in Railway variables
@@ -114,8 +118,5 @@ app.post("/stitch", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("stitcher running on", PORT);
-});
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log("stitcher running on", PORT));
