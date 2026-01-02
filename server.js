@@ -46,11 +46,20 @@ async function downloadToTmp(url, filename) {
 function runFFmpeg(args) {
   return new Promise((resolve, reject) => {
     const p = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    let stdout = "";
     let stderr = "";
+
+    p.stdout.on("data", (d) => (stdout += d.toString()));
     p.stderr.on("data", (d) => (stderr += d.toString()));
+
+    p.on("error", (err) => {
+      reject(new Error(`Failed to start ffmpeg: ${err.message}`));
+    });
+
     p.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg failed (${code}): ${stderr}`));
+      else reject(new Error(`ffmpeg failed (code ${code})\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
     });
   });
 }
