@@ -41,7 +41,6 @@ app.post("/stitch", async (req, res) => {
   if (bad) {
     return res.status(400).json({ error: "One of videoUrls is missing/invalid", bad, videoUrls });
   }
-});
 
 
     // 1. Download audio
