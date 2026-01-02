@@ -2,7 +2,6 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import fetch from "node-fetch";
 
 const app = express();
 
