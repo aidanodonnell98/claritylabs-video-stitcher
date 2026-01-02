@@ -127,6 +127,14 @@ app.post("/stitch", async (req, res) => {
 
 const basePath = path.join(os.tmpdir(), `base_${id}.mp4`);
 
+const filter =
+  `[0:v]` +
+  `scale='if(gt(a,9/16),1080,-2)':'if(gt(a,9/16),-2,1920)',` +
+  `crop=1080:1920,` +
+  `setsar=1,` +
+  `fps=30` +
+  `[v]`;
+
 // Step 1) Build base.mp4 from your 3 clips (hard cuts)
 const baseArgs = [
   "-y",
