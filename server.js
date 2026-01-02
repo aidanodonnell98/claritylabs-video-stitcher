@@ -121,50 +121,65 @@ app.post("/stitch", async (req, res) => {
     // Output file
     const outPath = path.join(os.tmpdir(), `final_${id}.mp4`);
 
-    // FFmpeg:
-    // - stream_loop -1 on the CONCAT INPUT (loops the whole playlist)
-    // - scale/crop to 1080x1920
-    // - hard cuts (concat demuxer is hard cuts)
-    // - -shortest stops when narration ends
-    const filter =
-      `[0:v]` +
-      `scale=1080:1920:force_original_aspect_ratio=increase,` +
-      `crop=1080:1920,` +
-      `setsar=1,` +
-      `fps=30` +
-      `[v]`;
+    // Make a normalized base (v1->v2->v3) at 1080x1920 once,
+// then loop that single base video until narration ends.
+// This is usually more stable and less CPU than looping concat demuxer forever.
 
-    const args = [
-      "-y",
-      "-loglevel", "error",
+const basePath = path.join(os.tmpdir(), `base_${id}.mp4`);
 
-      // Loop the playlist
-      "-stream_loop", "-1",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", listPath,
+// Step 1) Build base.mp4 from your 3 clips (hard cuts)
+const baseArgs = [
+  "-y",
+  "-loglevel", "error",
 
-      // Narration audio
-      "-i", a1,
+  // concat list as input (no looping here)
+  "-f", "concat",
+  "-safe", "0",
+  "-i", listPath,
 
-      "-filter_complex", filter,
-      "-map", "[v]",
-      "-map", "1:a",
+  "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30",
 
-      "-shortest",
+  "-an",
+  "-c:v", "libx264",
+  "-preset", "veryfast",
+  "-crf", "28",
+  "-pix_fmt", "yuv420p",
+  "-movflags", "+faststart",
+  basePath
+];
 
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-pix_fmt", "yuv420p",
+await runFFmpeg(baseArgs);
 
-      "-c:a", "aac",
-      "-b:a", "192k",
+// Step 2) Loop base.mp4 until narration ends, and mux narration audio
+const finalArgs = [
+  "-y",
+  "-loglevel", "error",
 
-      "-movflags", "+faststart",
-      outPath
-    ];
+  "-stream_loop", "-1",
+  "-i", basePath,
 
-    await runFFmpeg(args);
+  "-i", a1,
+
+  "-map", "0:v:0",
+  "-map", "1:a:0",
+  "-shortest",
+
+  "-c:v", "libx264",
+  "-preset", "veryfast",
+  "-crf", "28",
+  "-pix_fmt", "yuv420p",
+
+  "-c:a", "aac",
+  "-b:a", "192k",
+
+  "-movflags", "+faststart",
+  outPath
+];
+
+await runFFmpeg(finalArgs);
+
+// cleanup base
+try { fs.unlinkSync(basePath); } catch {}
 
     // Store result for GET
     results.set(id, { filePath: outPath, expiresAt: Date.now() + RESULT_TTL_MS });
