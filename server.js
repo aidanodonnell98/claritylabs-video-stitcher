@@ -53,13 +53,19 @@ function runFFmpeg(args) {
     p.stdout.on("data", (d) => (stdout += d.toString()));
     p.stderr.on("data", (d) => (stderr += d.toString()));
 
+    // IMPORTANT: this catches "ffmpeg not found"
     p.on("error", (err) => {
-      reject(new Error(`Failed to start ffmpeg: ${err.message}`));
+      reject(new Error(`spawn ffmpeg failed: ${err.code || ""} ${err.message}`));
     });
 
-    p.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg failed (code ${code})\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
+    // IMPORTANT: this tells us if Railway killed it (SIGKILL etc.)
+    p.on("close", (code, signal) => {
+      if (code === 0) return resolve();
+      reject(
+        new Error(
+          `ffmpeg exited code=${code} signal=${signal}\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`
+        )
+      );
     });
   });
 }
