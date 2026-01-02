@@ -4,12 +4,12 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-app.use(express.json({ limit: "1mb" }));
-
 const app = express();
 app.get("/", (req, res) => {
   res.status(200).send("OK");
 });
+
+app.use(express.json({ limit: "1mb" }));
 
 const API_KEY = process.env.API_KEY; // set in Railway variables
 
