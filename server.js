@@ -2,173 +2,188 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import crypto from "crypto";
+import { spawn } from "child_process";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 const app = express();
+app.use(express.json({ limit: "10mb" }));
+
+// Health + root
+app.get("/", (req, res) => res.status(200).send("OK"));
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+// Optional simple auth (set API_KEY in Railway Variables if you want)
+const API_KEY = process.env.API_KEY || "";
+
+// In-memory map so Make can GET the finished MP4
+const results = new Map(); // id -> { filePath, expiresAt }
+const RESULT_TTL_MS = 30 * 60 * 1000; // 30 min
+
+function cleanupResults() {
+  const now = Date.now();
+  for (const [id, meta] of results.entries()) {
+    if (meta.expiresAt <= now) {
+      try { fs.unlinkSync(meta.filePath); } catch {}
+      results.delete(id);
+    }
+  }
+}
+setInterval(cleanupResults, 60 * 1000).unref();
 
 async function downloadToTmp(url, filename) {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Failed to download ${url}`);
-  }
+  const res = await fetch(url, { redirect: "follow" });
+  if (!res.ok) throw new Error(`Failed to download ${url} (HTTP ${res.status})`);
+  if (!res.body) throw new Error(`No response body for ${url}`);
 
   const filePath = path.join(os.tmpdir(), filename);
-
-  const arrayBuffer = await res.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  await fs.promises.writeFile(filePath, buffer);
-
+  const nodeStream = Readable.fromWeb(res.body);
+  await pipeline(nodeStream, fs.createWriteStream(filePath));
   return filePath;
 }
 
-app.use(express.json({ limit: "10mb" }));
-
-app.get("/", (req, res) => res.status(200).send("OK"));
-
-app.post("/stitch", async (req, res) => {
-  const { audioUrl, videoUrls } = req.body || {};
-
-  // DEBUG: see exactly what Make sent
-  console.log("REQ BODY:", JSON.stringify(req.body, null, 2));
-
-  if (!audioUrl || typeof audioUrl !== "string" || !audioUrl.startsWith("http")) {
-    return res.status(400).json({ error: "audioUrl missing/invalid", audioUrl });
-  }
-  if (!Array.isArray(videoUrls) || videoUrls.length === 0) {
-    return res.status(400).json({ error: "videoUrls missing/empty", videoUrls });
-  }
-  const bad = videoUrls.find(v => !v || typeof v !== "string" || !v.startsWith("http"));
-  if (bad) {
-    return res.status(400).json({ error: "One of videoUrls is missing/invalid", bad, videoUrls });
-  }
-
-
-    // 1. Download audio
-    const audioPath = await downloadToTmp(audioUrl, "narration.mp3");
-
-    // 2. Download videos
-    const videoPaths = [];
-    for (let i = 0; i < videoUrls.length; i++) {
-      const videoPath = await downloadToTmp(
-        videoUrls[i],
-        `video_${i + 1}.mp4`
-      );
-      videoPaths.push(videoPath);
-    }
-
-    // 3. Log everything (IMPORTANT)
-    console.log("Audio saved at:", audioPath);
-    console.log("Videos saved at:", videoPaths);
-
-    // 4. Respond
-    res.json({
-      ok: true,
-      audioPath,
-      videoPaths
-    });
-});
-
-const API_KEY = process.env.API_KEY; // set in Railway variables
-
-function safeTmp(name) {
-  // ensure only filename-ish
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function run(cmd, args) {
+function runFFmpeg(args) {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     p.stderr.on("data", (d) => (stderr += d.toString()));
     p.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`Command failed (${code}): ${stderr}`));
+      else reject(new Error(`ffmpeg failed (${code}): ${stderr}`));
     });
   });
 }
 
-// Downloads via ffmpeg (handles redirects better than node-fetch for media URLs)
-async function downloadToFile(url, outPath) {
-  // -y overwrite, -loglevel error to keep clean
-  await run("ffmpeg", ["-y", "-loglevel", "error", "-i", url, "-c", "copy", outPath]);
-}
-
-app.get("/health", (req, res) => res.json({ ok: true }));
-
+/**
+ * POST /stitch
+ * Accepts either:
+ *  - { audioUrl, videoUrls: [..3..] }   (your current Make naming)
+ *  - { narrationUrl, videos: [..3..] }  (alternate)
+ *
+ * Returns:
+ *  - { ok: true, resultUrl }  where resultUrl is GET /result/:id
+ */
 app.post("/stitch", async (req, res) => {
   try {
-    // Simple auth (optional but recommended)
+    // Optional auth
     if (API_KEY) {
       const got = req.header("x-api-key");
       if (!got || got !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const { videos, narrationUrl, outWidth = 1080, outHeight = 1920 } = req.body;
+    // Support both payload styles
+    const audioUrl = req.body?.audioUrl ?? req.body?.narrationUrl;
+    const videoUrls = req.body?.videoUrls ?? req.body?.videos;
 
-    if (!Array.isArray(videos) || videos.length !== 3) {
-      return res.status(400).json({ error: "videos must be an array of exactly 3 URLs" });
+    console.log("REQ BODY:", JSON.stringify(req.body, null, 2));
+
+    if (!audioUrl || typeof audioUrl !== "string" || !audioUrl.startsWith("http")) {
+      return res.status(400).json({ error: "audioUrl/narrationUrl missing/invalid", audioUrl });
     }
-    if (!narrationUrl || typeof narrationUrl !== "string") {
-      return res.status(400).json({ error: "narrationUrl is required" });
+    if (!Array.isArray(videoUrls) || videoUrls.length !== 3) {
+      return res.status(400).json({ error: "videoUrls/videos must be an array of exactly 3 URLs", videoUrls });
     }
+    const bad = videoUrls.find(v => !v || typeof v !== "string" || !v.startsWith("http"));
+    if (bad) return res.status(400).json({ error: "One of the video URLs is invalid", bad });
 
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stitch-"));
-    const v1 = path.join(tmp, safeTmp("v1.mp4"));
-    const v2 = path.join(tmp, safeTmp("v2.mp4"));
-    const v3 = path.join(tmp, safeTmp("v3.mp4"));
-    const a1 = path.join(tmp, safeTmp("narration.mp3"));
-    const out = path.join(tmp, safeTmp("final.mp4"));
+    // Unique IDs + temp files
+    const id = crypto.randomBytes(8).toString("hex");
+    const v1 = await downloadToTmp(videoUrls[0], `v1_${id}.mp4`);
+    const v2 = await downloadToTmp(videoUrls[1], `v2_${id}.mp4`);
+    const v3 = await downloadToTmp(videoUrls[2], `v3_${id}.mp4`);
+    const a1 = await downloadToTmp(audioUrl, `narr_${id}.mp3`);
 
-    // Download inputs
-    await downloadToFile(videos[0], v1);
-    await downloadToFile(videos[1], v2);
-    await downloadToFile(videos[2], v3);
-    await downloadToFile(narrationUrl, a1);
+    // Create concat playlist file for looping v1->v2->v3
+    const listPath = path.join(os.tmpdir(), `list_${id}.txt`);
+    // IMPORTANT: concat demuxer needs "file 'path'"
+    const listTxt =
+      `file '${v1.replace(/'/g, "'\\''")}'\n` +
+      `file '${v2.replace(/'/g, "'\\''")}'\n` +
+      `file '${v3.replace(/'/g, "'\\''")}'\n`;
+    await fs.promises.writeFile(listPath, listTxt, "utf8");
 
-    // FFmpeg: loop each clip, concat hard cuts, crop/scale to 9:16, add narration, stop at narration end
-    const filter = `[0:v][1:v][2:v]concat=n=3:v=1:a=0,` +
-      `scale=${outWidth}:${outHeight}:force_original_aspect_ratio=increase,` +
-      `crop=${outWidth}:${outHeight},setsar=1[v]`;
+    // Output file
+    const outPath = path.join(os.tmpdir(), `final_${id}.mp4`);
+
+    // FFmpeg:
+    // - stream_loop -1 on the CONCAT INPUT (loops the whole playlist)
+    // - scale/crop to 1080x1920
+    // - hard cuts (concat demuxer is hard cuts)
+    // - -shortest stops when narration ends
+    const filter =
+      `[0:v]` +
+      `scale=1080:1920:force_original_aspect_ratio=increase,` +
+      `crop=1080:1920,` +
+      `setsar=1,` +
+      `fps=30` +
+      `[v]`;
 
     const args = [
-      "-y", "-loglevel", "error",
-      "-stream_loop", "-1", "-i", v1,
-      "-stream_loop", "-1", "-i", v2,
-      "-stream_loop", "-1", "-i", v3,
+      "-y",
+      "-loglevel", "error",
+
+      // Loop the playlist
+      "-stream_loop", "-1",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", listPath,
+
+      // Narration audio
       "-i", a1,
+
       "-filter_complex", filter,
       "-map", "[v]",
-      "-map", "3:a",
+      "-map", "1:a",
+
       "-shortest",
-      "-r", "30",
+
       "-c:v", "libx264",
       "-preset", "veryfast",
       "-pix_fmt", "yuv420p",
+
       "-c:a", "aac",
       "-b:a", "192k",
+
       "-movflags", "+faststart",
-      out
+      outPath
     ];
 
-    await run("ffmpeg", args);
+    await runFFmpeg(args);
 
-    // Return the MP4 binary
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader("Content-Disposition", 'attachment; filename="final.mp4"');
+    // Store result for GET
+    results.set(id, { filePath: outPath, expiresAt: Date.now() + RESULT_TTL_MS });
 
-    const stream = fs.createReadStream(out);
-    stream.on("close", () => {
-      // cleanup best-effort
-      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
-    });
-    stream.pipe(res);
+    // Best-effort cleanup of intermediate files
+    for (const p of [v1, v2, v3, a1, listPath]) {
+      try { fs.unlinkSync(p); } catch {}
+    }
+
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const resultUrl = `${baseUrl}/result/${id}`;
+
+    return res.json({ ok: true, resultUrl, id });
   } catch (e) {
-    res.status(500).json({ error: e.message || String(e) });
+    console.error(e);
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// Download endpoint Make can use
+app.get("/result/:id", (req, res) => {
+  const id = req.params.id;
+  const meta = results.get(id);
+  if (!meta) return res.status(404).send("Not found (expired or missing)");
 
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Content-Disposition", `attachment; filename="final_${id}.mp4"`);
+
+  const stream = fs.createReadStream(meta.filePath);
+  stream.on("error", () => res.status(500).end());
+  stream.pipe(res);
+});
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("stitcher running on", PORT);
 });
