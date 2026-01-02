@@ -26,12 +26,23 @@ app.use(express.json({ limit: "10mb" }));
 app.get("/", (req, res) => res.status(200).send("OK"));
 
 app.post("/stitch", async (req, res) => {
-  try {
-    const { audioUrl, videoUrls } = req.body;
+  const { audioUrl, videoUrls } = req.body || {};
 
-    if (!audioUrl || !Array.isArray(videoUrls) || videoUrls.length === 0) {
-      return res.status(400).json({ error: "Invalid input" });
-    }
+  // DEBUG: see exactly what Make sent
+  console.log("REQ BODY:", JSON.stringify(req.body, null, 2));
+
+  if (!audioUrl || typeof audioUrl !== "string" || !audioUrl.startsWith("http")) {
+    return res.status(400).json({ error: "audioUrl missing/invalid", audioUrl });
+  }
+  if (!Array.isArray(videoUrls) || videoUrls.length === 0) {
+    return res.status(400).json({ error: "videoUrls missing/empty", videoUrls });
+  }
+  const bad = videoUrls.find(v => !v || typeof v !== "string" || !v.startsWith("http"));
+  if (bad) {
+    return res.status(400).json({ error: "One of videoUrls is missing/invalid", bad, videoUrls });
+  }
+});
+
 
     // 1. Download audio
     const audioPath = await downloadToTmp(audioUrl, "narration.mp3");
