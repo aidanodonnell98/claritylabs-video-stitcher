@@ -1,23 +1,67 @@
 import express from "express";
-import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import fetch from "node-fetch";
 
 const app = express();
+
+async function downloadToTmp(url, filename) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to download ${url}`);
+
+  const filePath = path.join(os.tmpdir(), filename);
+  const fileStream = fs.createWriteStream(filePath);
+
+  await new Promise((resolve, reject) => {
+    res.body.pipe(fileStream);
+    res.body.on("error", reject);
+    fileStream.on("finish", resolve);
+  });
+
+  return filePath;
+}
 
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/", (req, res) => res.status(200).send("OK"));
 
-app.post("/stitch", (req, res) => {
-  const { audioUrl, videoUrls } = req.body || {};
-  return res.status(200).json({
-    ok: true,
-    audioUrl,
-    videoCount: Array.isArray(videoUrls) ? videoUrls.length : 0,
-    firstVideo: Array.isArray(videoUrls) ? videoUrls[0] : null
-  });
+app.post("/stitch", async (req, res) => {
+  try {
+    const { audioUrl, videoUrls } = req.body;
+
+    if (!audioUrl || !Array.isArray(videoUrls) || videoUrls.length === 0) {
+      return res.status(400).json({ error: "Invalid input" });
+    }
+
+    // 1. Download audio
+    const audioPath = await downloadToTmp(audioUrl, "narration.mp3");
+
+    // 2. Download videos
+    const videoPaths = [];
+    for (let i = 0; i < videoUrls.length; i++) {
+      const videoPath = await downloadToTmp(
+        videoUrls[i],
+        `video_${i + 1}.mp4`
+      );
+      videoPaths.push(videoPath);
+    }
+
+    // 3. Log everything (IMPORTANT)
+    console.log("Audio saved at:", audioPath);
+    console.log("Videos saved at:", videoPaths);
+
+    // 4. Respond
+    res.json({
+      ok: true,
+      audioPath,
+      videoPaths
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const API_KEY = process.env.API_KEY; // set in Railway variables
