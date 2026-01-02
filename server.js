@@ -7,16 +7,16 @@ const app = express();
 
 async function downloadToTmp(url, filename) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download ${url}`);
+  if (!res.ok) {
+    throw new Error(`Failed to download ${url}`);
+  }
 
   const filePath = path.join(os.tmpdir(), filename);
-  const fileStream = fs.createWriteStream(filePath);
 
-  await new Promise((resolve, reject) => {
-    res.body.pipe(fileStream);
-    res.body.on("error", reject);
-    fileStream.on("finish", resolve);
-  });
+  const arrayBuffer = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  await fs.promises.writeFile(filePath, buffer);
 
   return filePath;
 }
