@@ -149,7 +149,7 @@ const baseArgs = [
 
   "-an",
   "-c:v", "libx264",
-  "-preset", "veryfast",
+  "-preset", "ultrafast",
   "-crf", "28",
   "-pix_fmt", "yuv420p",
   "-movflags", "+faststart",
