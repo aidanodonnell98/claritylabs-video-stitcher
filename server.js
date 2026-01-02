@@ -5,7 +5,6 @@ import path from "path";
 import os from "os";
 
 const app = express();
-const app = express();
 app.get("/", ...);
 app.listen(process.env.PORT || 8080);
 app.use(express.json({ limit: "1mb" }));
