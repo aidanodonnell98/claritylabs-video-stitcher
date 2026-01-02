@@ -66,8 +66,8 @@ app.post("/stitch", async (req, res) => {
       audioPath,
       videoPaths
     });
-
-  } catch (err) {
+    
+    catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
