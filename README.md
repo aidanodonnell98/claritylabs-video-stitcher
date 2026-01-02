@@ -1,0 +1,1 @@
+# claritylabs-video-stitcher
