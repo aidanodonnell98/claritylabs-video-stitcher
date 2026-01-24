@@ -79,6 +79,15 @@ function runFFmpeg(args) {
  * Returns:
  *  - { ok: true, resultUrl }  where resultUrl is GET /result/:id
  */
+function runFFmpegWithTimeout(ffmpegArgs, timeoutMs, label = "ffmpeg") {
+  return Promise.race([
+    runFFmpeg(ffmpegArgs),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timeout exceeded`)), timeoutMs)
+    )
+  ]);
+}
+
 app.post("/stitch", async (req, res) => {
   try {
     // Optional auth
@@ -127,14 +136,6 @@ app.post("/stitch", async (req, res) => {
 
 const basePath = path.join(os.tmpdir(), `base_${id}.mp4`);
 
-const filter =
-  `[0:v]` +
-  `scale='if(gt(a,9/16),1080,-2)':'if(gt(a,9/16),-2,1920)',` +
-  `crop=1080:1920,` +
-  `setsar=1,` +
-  `fps=30` +
-  `[v]`;
-
 // Step 1) Build base.mp4 from your 3 clips (hard cuts)
 const baseArgs = [
   "-y",
@@ -156,14 +157,8 @@ const baseArgs = [
   basePath
 ];
 
-const FF_TIMEOUT_MS = 90_000; // 90 seconds (safe for 1080x1920)
-
-await Promise.race([
-  runFFmpeg(args),
-  new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("ffmpeg timeout exceeded")), FF_TIMEOUT_MS)
-  )
-]);
+const BASE_TIMEOUT_MS = 90_000; // base encode
+await runFFmpegWithTimeout(baseArgs, BASE_TIMEOUT_MS, "ffmpeg base");
 
 // Step 2) Loop base.mp4 until narration ends, and mux narration audio
 const finalArgs = [
@@ -191,7 +186,8 @@ const finalArgs = [
   outPath
 ];
 
-await runFFmpeg(finalArgs);
+const FINAL_TIMEOUT_MS = 180_000; // final mux/encode
+await runFFmpegWithTimeout(finalArgs, FINAL_TIMEOUT_MS, "ffmpeg final");
 
 // cleanup base
 try { fs.unlinkSync(basePath); } catch {}
