@@ -200,7 +200,7 @@ try { fs.unlinkSync(basePath); } catch {}
       try { fs.unlinkSync(p); } catch {}
     }
 
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const baseUrl = `https://${req.get("host")}`;
     const resultUrl = `${baseUrl}/result/${id}`;
 
     return res.json({ ok: true, resultUrl, id });
