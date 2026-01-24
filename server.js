@@ -156,7 +156,14 @@ const baseArgs = [
   basePath
 ];
 
-await runFFmpeg(baseArgs);
+const FF_TIMEOUT_MS = 90_000; // 90 seconds (safe for 1080x1920)
+
+await Promise.race([
+  runFFmpeg(args),
+  new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("ffmpeg timeout exceeded")), FF_TIMEOUT_MS)
+  )
+]);
 
 // Step 2) Loop base.mp4 until narration ends, and mux narration audio
 const finalArgs = [
