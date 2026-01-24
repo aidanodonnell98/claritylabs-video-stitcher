@@ -70,15 +70,40 @@ function runFFmpeg(args) {
   });
 }
 
-/**
- * POST /stitch
- * Accepts either:
- *  - { audioUrl, videoUrls: [..3..] }   (your current Make naming)
- *  - { narrationUrl, videos: [..3..] }  (alternate)
- *
- * Returns:
- *  - { ok: true, resultUrl }  where resultUrl is GET /result/:id
- */
+function runCmd(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    let out = "";
+    let err = "";
+
+    p.stdout.on("data", (d) => (out += d.toString()));
+    p.stderr.on("data", (d) => (err += d.toString()));
+
+    p.on("error", (e) => reject(e));
+
+    p.on("close", (code) => {
+      if (code === 0) resolve({ out, err });
+      else reject(new Error(`${cmd} failed (code ${code}): ${err}`));
+    });
+  });
+}
+
+async function getMediaDurationSeconds(filePath) {
+  const { out } = await runCmd("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    filePath
+  ]);
+
+  const s = parseFloat(String(out).trim());
+  if (!Number.isFinite(s) || s <= 0) {
+    throw new Error(`Bad duration from ffprobe: ${out}`);
+  }
+  return s;
+}
+
 function runFFmpegWithTimeout(ffmpegArgs, timeoutMs, label = "ffmpeg") {
   return Promise.race([
     runFFmpeg(ffmpegArgs),
@@ -117,6 +142,9 @@ app.post("/stitch", async (req, res) => {
     const v2 = await downloadToTmp(videoUrls[1], `v2_${id}.mp4`);
     const v3 = await downloadToTmp(videoUrls[2], `v3_${id}.mp4`);
     const a1 = await downloadToTmp(audioUrl, `narr_${id}.mp3`);
+
+    const audioDur = await getMediaDurationSeconds(a1);
+    console.log("Audio duration (s):", audioDur);
 
     // Create concat playlist file for looping v1->v2->v3
     const listPath = path.join(os.tmpdir(), `list_${id}.txt`);
@@ -183,6 +211,7 @@ const finalArgs = [
   "-b:a", "192k",
 
   "-movflags", "+faststart",
+  "-t", String(audioDur),
   outPath
 ];
 
